@@ -20,6 +20,8 @@ This loop repeats (capped at a max iteration count) until the plan is genuinely 
 
 ## Architecture
 
+![Learning Path Generator architecture graph](architecture.png)
+
 ```
 START → search → plan → generate → critique → (conditional routing)
               ↑           ↑                        ├─ approve → finalize → END

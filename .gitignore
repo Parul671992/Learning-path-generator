@@ -1,0 +1,18 @@
+# Environment variables / secrets
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Checkpointing DB (if switched to file-based)
+checkpoints.db
+
+# OS
+.DS_Store

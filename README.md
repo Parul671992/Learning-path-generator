@@ -1,8 +1,8 @@
 # Learning Path Generator
 
-An AI agent that generates a personalized, week-by-week learning path for any topic — and iteratively critiques and refines its own output before presenting it to the user. Built with [LangGraph](https://github.com/langchain-ai/langgraph) to explore stateful, cyclical agent orchestration (as opposed to a simple one-shot LLM call).
+An AI agent that generates a personalized, week-by-week learning path for any topic, and iteratively critiques and refines its own output before presenting it to the user. Built with [LangGraph](https://github.com/langchain-ai/langgraph) to explore stateful, cyclical agent orchestration (as opposed to a simple one-shot LLM call).
 
-A CrewAI implementation of the same system is planned as a comparison exercise — see [Framework Comparison](#framework-comparison-langgraph-vs-crewai) below.
+A CrewAI implementation of the same system is planned as a comparison exercise, see [Framework Comparison](#framework-comparison-langgraph-vs-crewai) below.
 
 ## What it does
 

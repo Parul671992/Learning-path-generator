@@ -2,7 +2,7 @@
 
 An AI agent that generates a personalized, week-by-week learning path for any topic, and iteratively critiques and refines its own output before presenting it to the user. Built with [LangGraph](https://github.com/langchain-ai/langgraph) to explore stateful, cyclical agent orchestration (as opposed to a simple one-shot LLM call).
 
-A CrewAI implementation of the same system is planned as a comparison exercise, see [Framework Comparison](#framework-comparison-langgraph-vs-crewai) below.
+A second implementation of the same system, built in [CrewAI](https://github.com/crewAIInc/crewAI), lives alongside this one as a framework comparison exercise — see [Framework Comparison](#framework-comparison-langgraph-vs-crewai) below, and [COMPARISON.md](./COMPARISON.md) for the full write-up.
 
 ## What it does
 
@@ -35,22 +35,35 @@ Built as a `StateGraph` with 5 nodes (`search`, `plan`, `generate`, `critique`, 
 
 **1. Clone the repo and install dependencies**
 ```bash
-git clone <your-repo-url>
-cd learning-path-generator
+git clone https://github.com/Parul671992/Learning-path-generator.git
+cd Learning-path-generator
 pip install -r requirements.txt
 ```
 
-**2. Get a free Groq API key**
-Sign up at [console.groq.com](https://console.groq.com) — no credit card required.
+**2. Get free API keys**
+
+Both notebooks call out to an LLM and a web search tool — you'll need a key for each:
+
+| Key | Used by | Get it at |
+|---|---|---|
+| `GROQ_API_KEY` | Both notebooks (LLM inference) | console.groq.com — no credit card required |
+| `TAVILY_API_KEY` | LangGraph notebook's search tool | tavily.com |
+| `SERPER_API_KEY` | CrewAI notebook's search tool | serper.dev |
 
 **3. Create a `.env` file in the project root**
 ```
-GROQ_API_KEY=your_key_here
+GROQ_API_KEY=your_groq_key_here
+TAVILY_API_KEY=your_tavily_key_here
+SERPER_API_KEY=your_serper_key_here
 ```
 (`.env` is gitignored — never commit real API keys.)
 
-**4. Run the notebook**
-Open `learning_path_generator.ipynb` in Jupyter and run all cells top to bottom.
+**4. Run the notebooks**
+
+- `learning_path_generator.ipynb` — the LangGraph version
+- `learning_path_generator_crewai.ipynb` — the CrewAI version
+
+Each is self-contained; open either in Jupyter and run all cells top to bottom. Neither depends on the other having been run first.
 
 ## Design decisions & lessons learned
 
@@ -68,20 +81,34 @@ A few deliberate choices worth calling out — and what I learned building this:
 
 - **Checkpointing (LangGraph's `SqliteSaver`).** The graph is compiled with a checkpointer, so state is saved after every node execution, keyed by a `thread_id`. This isn't just plumbing — it's what would enable resuming a long-running plan generation, inspecting intermediate state, or building a human-in-the-loop review step later.
 
+For the CrewAI-specific lessons (including five real framework bugs found and fixed), see [COMPARISON.md](./COMPARISON.md).
+
 ## Known limitations (v1)
 
-- `resource_type` on search results is left as `"unknown"` — classifying it properly would need an extra LLM call per search, which I skipped for cost/latency reasons given search can run multiple times per session. See tradeoff note in code comments.
+- `resource_type` on search results is left as `"unknown"` — classifying it properly would need an extra LLM call per search, which I skipped for cost/latency reasons given search can run multiple times per session.
 - Checkpointing currently uses in-memory SQLite (`:memory:`), so state doesn't persist across kernel restarts. Switching to a file-based DB is a one-line change if cross-session persistence is needed.
 - Single LLM provider (Groq). No fallback if Groq's API is unavailable.
 - No human-in-the-loop step yet — the critique loop is fully autonomous. A natural v2 addition, enabled by the checkpointing already in place.
+- Search result count is fixed at 5 regardless of the time budget requested — kept fixed intentionally to keep the LangGraph and CrewAI versions a fair, like-for-like comparison.
 
 ## Tech stack
 
-- **LangGraph** — stateful agent orchestration
-- **Groq** (`openai/gpt-oss-120b`) — LLM inference, free tier
-- **Tavily** — web search
+- **LangGraph** — stateful agent orchestration (LangGraph notebook)
+- **CrewAI** — role-based agent orchestration (CrewAI notebook)
+- **Groq** (`openai/gpt-oss-120b`) — LLM inference, free tier, used by both notebooks
+- **Tavily** — web search (LangGraph notebook)
+- **Serper** — web search (CrewAI notebook)
 - **Pydantic** — structured output schemas
 
 ## Framework Comparison: LangGraph vs CrewAI
 
-*(In progress — a CrewAI implementation of this same system is being built to compare against this LangGraph version on: control flow expressiveness, debugging experience, boilerplate, conditional branching support, and cost/latency for equivalent functionality.)*
+Both versions of this project are in this repo: `learning_path_generator.ipynb` (LangGraph) and `learning_path_generator_crewai.ipynb` (CrewAI).
+
+Quick summary — full details in [COMPARISON.md](./COMPARISON.md):
+
+- **Looping/routing**: LangGraph has native conditional edges for cycles. CrewAI's sequential mode has no native equivalent — replicating the critique loop needed a manual outer Python loop. CrewAI's hierarchical mode looked like a natural fit but hit a documented, unresolved framework bug where the manager agent executes work itself instead of delegating.
+- **Control-flow guarantees**: in both frameworks, reliable stopping/routing logic needs to live in code, not in an LLM's judgment — a lesson that showed up independently three separate times across both builds.
+- **Bugs found**: the CrewAI build surfaced 5 distinct real bugs (a Groq compatibility issue, a loose tool schema, the hierarchical delegation bug above, a broken structured-output mechanism, and a stale task-caching bug that silently broke the critique loop for several iterations before being diagnosed).
+- **Persistence**: LangGraph has built-in checkpointing and can resume a failed run from where it left off. CrewAI has no equivalent — a failed run restarts the entire pipeline from task 1.
+
+See [COMPARISON.md](./COMPARISON.md) for the full architecture comparison, the debugging log, and the final verdict.

@@ -23,13 +23,22 @@ This loop repeats (capped at a max iteration count) until the plan is genuinely 
 ![Learning Path Generator architecture graph](architecture.png)
 
 ```
-START → search → plan → generate → critique → (conditional routing)
-              ↑           ↑                        ├─ approve → finalize → END
-              └───────────┴────── replan/research ──┤
-                                                      └─ max iterations → finalize → END
+START → (mode routing)
+              ├─ "web"       → search    ─┐
+              └─ "documents" → retrieve  ─┴→ plan → generate → critique → (conditional routing)
+                                                          ↑           ↑           ├─ approve → finalize → END
+                                                          └───────────┴── replan ─┤
+                                                          └── research (routes back to search OR retrieve, matching original mode) ┤
+                                                                                  └─ max iterations → finalize → END
 ```
 
-Built as a `StateGraph` with 5 nodes (`search`, `plan`, `generate`, `critique`, `finalize`) and one conditional edge that routes based on the critique agent's verdict.
+Built as a `StateGraph` with 6 nodes (`search`, `retrieve`, `plan`, `generate`, `critique`, `finalize`), a conditional entry point that routes to `search` (web) or `retrieve` (user documents) based on the requested `mode`, and a conditional edge after `critique` that routes based on the verdict — including routing `"research"` back to whichever resource-gathering node matches the original mode.
+
+**Two resource-gathering modes:**
+- **`web`** — searches the live web via Tavily (LangGraph) or Serper (CrewAI)
+- **`documents`** — retrieves from the user's own uploaded documents via a local RAG pipeline: documents are chunked (`RecursiveCharacterTextSplitter`), embedded with a local, free HuggingFace model (`all-MiniLM-L6-v2`, no API key needed), stored in a Chroma vector store, and the most relevant chunks are retrieved via similarity search against the topic.
+
+Both modes produce the same `SearchResult` structure, so `plan`, `generate`, and `critique` are entirely unaware of which mode produced their input — the RAG mode was added with zero changes to the downstream loop.
 
 ## Setup
 
@@ -65,6 +74,10 @@ SERPER_API_KEY=your_serper_key_here
 
 Each is self-contained; open either in Jupyter and run all cells top to bottom. Neither depends on the other having been run first.
 
+**5. (Optional) Try the RAG / "documents" mode**
+
+To generate a learning path grounded in your own documents instead of the web, set `mode: "documents"` in the initial state and point `docs_folder` at a folder of your own `.txt`, `.md`, or `.pdf` files (a couple of sample files are included in `my_documents/` to try it out immediately). No extra API key is needed — embeddings run locally.
+
 ## Design decisions & lessons learned
 
 A few deliberate choices worth calling out — and what I learned building this:
@@ -80,6 +93,12 @@ A few deliberate choices worth calling out — and what I learned building this:
 - **A retry wrapper around structured-output calls.** LLM outputs are probabilistic — even with a tight schema, a call can occasionally fail validation (e.g., the model returning a list where a string was expected). Rather than fixing this at the prompt level alone, I added a small retry wrapper (`invoke_with_retry`) with logging, so occasional validation failures self-heal instead of crashing the whole run. This is standard practice for any system built on non-deterministic model output.
 
 - **Checkpointing (LangGraph's `SqliteSaver`).** The graph is compiled with a checkpointer, so state is saved after every node execution, keyed by a `thread_id`. This isn't just plumbing — it's what would enable resuming a long-running plan generation, inspecting intermediate state, or building a human-in-the-loop review step later.
+
+- **RAG mode reuses the existing resource structure rather than introducing a parallel data path.** Retrieved document chunks are mapped into the same `SearchResult` schema that web search results use (with `resource_type="user_document"` to distinguish them), so `plan`, `generate`, and `critique` needed zero changes to support the new mode — the only new code is the `retrieve` node itself and the mode-based routing at the graph's entry point and after `critique`.
+
+- **A routing bug specific to adding the second mode**: the conditional edge after `critique` originally hardcoded a `"research"` verdict to always route back to the web `search` node, regardless of which mode the run started in. This silently switched a "documents" mode run back to web search mid-run whenever critique asked for better resources — the fix makes that route conditional on the original `mode`. A good reminder that adding a second path through a graph means re-checking every existing conditional edge, not just adding new nodes.
+
+- **Retrieval working correctly isn't enough — the downstream prompt needs to forbid inventing resources.** Even with retrieval correctly grounded in the user's documents, `plan`'s first version still hallucinated generic, familiar-sounding web courses instead of using the retrieved content, because nothing told it not to. Adding an explicit instruction ("only use the resources provided below, do not invent others") fixed this completely — another instance of the same "explicit instructions, not vague ones" lesson from the critique-calibration issue.
 
 For the CrewAI-specific lessons (including five real framework bugs found and fixed), see [COMPARISON.md](./COMPARISON.md).
 
@@ -98,6 +117,8 @@ For the CrewAI-specific lessons (including five real framework bugs found and fi
 - **Groq** (`openai/gpt-oss-120b`) — LLM inference, free tier, used by both notebooks
 - **Tavily** — web search (LangGraph notebook)
 - **Serper** — web search (CrewAI notebook)
+- **Chroma** — local vector store for RAG / "documents" mode (LangGraph notebook)
+- **HuggingFace `sentence-transformers` (`all-MiniLM-L6-v2`)** — local embeddings, no API key needed
 - **Pydantic** — structured output schemas
 
 ## Framework Comparison: LangGraph vs CrewAI

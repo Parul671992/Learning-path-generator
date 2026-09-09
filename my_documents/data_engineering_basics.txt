@@ -1,0 +1,19 @@
+Data Engineering Fundamentals
+
+Introduction to Data Pipelines
+A data pipeline is a series of steps that move data from one system to another, typically transforming it along the way. Data engineers design pipelines that extract data from source systems, transform it into a usable format, and load it into a destination such as a data warehouse. This pattern is commonly known as ETL (Extract, Transform, Load), or its more modern variant, ELT (Extract, Load, Transform), where raw data is loaded first and transformed later using the destination system's compute power.
+
+Batch vs Streaming Processing
+Batch processing handles data in large, scheduled chunks - for example, processing a full day's worth of sales transactions every night. Streaming processing, by contrast, handles data continuously as it arrives, often with sub-second latency. Tools like Apache Kafka are commonly used for streaming data pipelines, while tools like Apache Airflow are commonly used to orchestrate batch pipelines.
+
+Data Warehouses vs Data Lakes
+A data warehouse stores structured, processed data optimized for fast querying and business intelligence, typically using a schema-on-write approach. A data lake stores raw, often unstructured data at scale, using a schema-on-read approach where structure is applied only when the data is queried. Modern architectures increasingly blend the two into what is called a "lakehouse," combining the flexibility of a lake with the query performance of a warehouse.
+
+SQL Fundamentals for Data Engineers
+Strong SQL skills are essential for data engineering roles. Key concepts include joins (inner, left, right, full outer), window functions for running calculations across rows, common table expressions (CTEs) for readable multi-step queries, and query optimization techniques such as indexing and partitioning to improve performance on large datasets.
+
+Data Quality and Validation
+Data engineers are responsible for ensuring data quality throughout a pipeline. Common practices include schema validation (ensuring incoming data matches an expected structure), null and duplicate checks, referential integrity checks between related tables, and automated data quality monitoring tools that alert engineers when anomalies are detected.
+
+Career Path Notes
+Entry-level data engineering roles typically expect proficiency in SQL and at least one programming language (commonly Python), familiarity with a cloud platform (AWS, GCP, or Azure), and some exposure to pipeline orchestration tools. A strong portfolio project demonstrating an end-to-end pipeline - from raw data ingestion to a queryable, cleaned dataset - is one of the most effective ways to stand out to hiring managers.

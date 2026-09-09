@@ -8,3 +8,9 @@ tavily-python
 crewai
 crewai-tools
 litellm
+langchain-huggingface
+langchain-chroma
+langchain-text-splitters
+chromadb
+sentence-transformers
+pypdf

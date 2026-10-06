@@ -4,17 +4,19 @@ An AI agent that generates a personalized, week-by-week learning path for any to
 
 A second implementation of the same system, built in [CrewAI](https://github.com/crewAIInc/crewAI), lives alongside this one as a framework comparison exercise — see [Framework Comparison](#framework-comparison-langgraph-vs-crewai) below, and [COMPARISON.md](./COMPARISON.md) for the full write-up.
 
+The LangGraph pipeline is also exposed as an [MCP](https://modelcontextprotocol.io) server — callable from Claude Desktop locally, or containerized with Docker and callable over the network — see [MCP and Docker](#mcp-server--docker) below.
+
 ## What it does
 
 Given a **topic**, a **time budget** (in weeks), a **level** (beginner / intermediate / expert), and a **goal** (e.g. job hunting, general learning), the system:
 
-1. **Searches** the web for real, current learning resources on the topic
+1. **Searches** the web for real, current learning resources on the topic — or **retrieves** from the user's own documents instead (RAG mode)
 2. **Plans** a week-by-week sequence of those resources, respecting the time budget and level
 3. **Generates** a polished, human-readable write-up of the plan
 4. **Critiques** its own output against the original constraints, and either:
    - **Approves** it and finalizes, or
    - **Sends it back to re-plan** (if pacing/sequencing is the problem), or
-   - **Sends it back to re-search** (if the resources themselves are inadequate)
+   - **Sends it back to re-search/re-retrieve** (if the resources themselves are inadequate)
 
 This loop repeats (capped at a max iteration count) until the plan is genuinely good, or the cap is hit — in which case the final output is still returned, with a disclaimer noting it may need manual review.
 
@@ -55,8 +57,8 @@ Both notebooks call out to an LLM and a web search tool — you'll need a key fo
 
 | Key | Used by | Get it at |
 |---|---|---|
-| `GROQ_API_KEY` | Both notebooks (LLM inference) | console.groq.com — no credit card required |
-| `TAVILY_API_KEY` | LangGraph notebook's search tool | tavily.com |
+| `GROQ_API_KEY` | Both notebooks, and the MCP server (LLM inference) | console.groq.com — no credit card required |
+| `TAVILY_API_KEY` | LangGraph notebook's search tool, and the MCP server | tavily.com |
 | `SERPER_API_KEY` | CrewAI notebook's search tool | serper.dev |
 
 **3. Create a `.env` file in the project root**
@@ -77,6 +79,42 @@ Each is self-contained; open either in Jupyter and run all cells top to bottom. 
 **5. (Optional) Try the RAG / "documents" mode**
 
 To generate a learning path grounded in your own documents instead of the web, set `mode: "documents"` in the initial state and point `docs_folder` at a folder of your own `.txt`, `.md`, or `.pdf` files (a couple of sample files are included in `my_documents/` to try it out immediately). No extra API key is needed — embeddings run locally.
+
+## MCP Server + Docker
+
+The LangGraph pipeline (`learning_path_core.py`) is also exposed as a standalone [MCP](https://modelcontextprotocol.io) server (`mcp_server.py`), so it can be called as a single tool — `generate_learning_path(topic, level, goal, time_weeks, mode, docs_folder)` — from any MCP-compatible client, not just from a notebook cell.
+
+### Why extract the core logic out of the notebook
+
+`learning_path_core.py` holds the exact same state, nodes, and graph as the notebook (same lines, same order — extracted verbatim, not rewritten), just as a plain, importable Python module instead of notebook cells. Notebooks can't be `import`-ed by another program or run as a standalone process, which is what both MCP and Docker need.
+
+### Running locally with Claude Desktop (stdio)
+
+1. Install the MCP SDK: `pip install "mcp[cli]"`
+2. Add an entry for this server to Claude Desktop's config (`claude_desktop_config.json`), pointing `command` at your Python executable and `args` at the full path to `mcp_server.py`, with your API keys under `env`.
+3. Restart Claude Desktop. The tool should show as "Running" under Settings → Developer.
+4. Ask Claude Desktop, in plain English, to generate a learning path — it will call the tool automatically.
+
+This uses `stdio` transport: Claude Desktop launches `mcp_server.py` itself as a local child process and talks to it directly. Nothing is hosted anywhere — it only runs on the machine Claude Desktop is installed on, for as long as Claude Desktop needs it.
+
+### Running as a containerized network service (Docker, streamable-http)
+
+The same `mcp_server.py` can instead run as a real network service, listening on a port, reachable over HTTP — this is what makes it deployable, not just locally callable.
+
+```bash
+docker build -t learning-path-mcp .
+docker run --env-file .env -p 8000:8000 learning-path-mcp
+```
+
+The server is then reachable at `http://localhost:8000/mcp` (or wherever the container is actually deployed). Transport is controlled by one environment variable (`MCP_TRANSPORT`), defaulting to `stdio` — Claude Desktop's config never sets this, so the local setup above is completely unaffected by the Docker addition.
+
+**Design choices worth calling out:**
+- The embeddings model is downloaded **during the Docker build**, not at container startup — avoids a network dependency (and the exact timeout failure hit with the Claude Desktop stdio setup) every time the container starts.
+- PyTorch is pinned to the **CPU-only build** via `--extra-index-url https://download.pytorch.org/whl/cpu` in `requirements-mcp.txt` — without this, pip pulls several gigabytes of unused NVIDIA/CUDA packages, since this container never uses a GPU.
+- API keys are **never baked into the image** — passed at `docker run` time via `--env-file`, so a built image never contains secrets even if shared or pushed to a registry.
+- `requirements-mcp.txt` is a separate, trimmed dependency list from the main `requirements.txt` — only what the MCP server itself needs, kept the image smaller and the build faster.
+
+For the full debugging log behind this (the real bugs hit building the container), see [COMPARISON.md](./COMPARISON.md).
 
 ## Design decisions & lessons learned
 
@@ -100,6 +138,10 @@ A few deliberate choices worth calling out — and what I learned building this:
 
 - **Retrieval working correctly isn't enough — the downstream prompt needs to forbid inventing resources.** Even with retrieval correctly grounded in the user's documents, `plan`'s first version still hallucinated generic, familiar-sounding web courses instead of using the retrieved content, because nothing told it not to. Adding an explicit instruction ("only use the resources provided below, do not invent others") fixed this completely — another instance of the same "explicit instructions, not vague ones" lesson from the critique-calibration issue.
 
+- **Extracting the notebook into a reusable module paid off twice.** Pulling `learning_path_core.py` out of the notebook was originally meant to support the MCP server, but it turned out to be the exact same first step Docker needed too (a plain, importable, standalone entrypoint) — doing it once served both additions.
+
+- **A local dependency (HuggingFace embeddings) silently making a network call caused a real, hard-to-diagnose failure.** The embeddings model checked in with HuggingFace's Hub on every startup, even though it was already downloaded locally — this hung long enough on a slow network to blow past Claude Desktop's connection timeout, intermittently "breaking" the MCP server for no apparent code reason. Fixed with `HF_HUB_OFFLINE=1`. The same root cause was addressed differently in Docker: downloading the model at build time instead of container startup, so the container never needs network access for it at all.
+
 For the CrewAI-specific lessons (including five real framework bugs found and fixed), see [COMPARISON.md](./COMPARISON.md).
 
 ## Known limitations (v1)
@@ -109,17 +151,21 @@ For the CrewAI-specific lessons (including five real framework bugs found and fi
 - Single LLM provider (Groq). No fallback if Groq's API is unavailable.
 - No human-in-the-loop step yet — the critique loop is fully autonomous. A natural v2 addition, enabled by the checkpointing already in place.
 - Search result count is fixed at 5 regardless of the time budget requested — kept fixed intentionally to keep the LangGraph and CrewAI versions a fair, like-for-like comparison.
+- The CrewAI version is not yet exposed as its own MCP server — only the LangGraph pipeline is.
+- The Docker image has only been tested running locally (`docker run` on the same laptop) — not yet deployed to an actual cloud host.
 
 ## Tech stack
 
 - **LangGraph** — stateful agent orchestration (LangGraph notebook)
 - **CrewAI** — role-based agent orchestration (CrewAI notebook)
-- **Groq** (`openai/gpt-oss-120b`) — LLM inference, free tier, used by both notebooks
-- **Tavily** — web search (LangGraph notebook)
+- **Groq** (`openai/gpt-oss-120b`) — LLM inference, free tier, used by both notebooks and the MCP server
+- **Tavily** — web search (LangGraph notebook, MCP server)
 - **Serper** — web search (CrewAI notebook)
-- **Chroma** — local vector store for RAG / "documents" mode (LangGraph notebook)
+- **Chroma** — local vector store for RAG / "documents" mode (LangGraph notebook, MCP server)
 - **HuggingFace `sentence-transformers` (`all-MiniLM-L6-v2`)** — local embeddings, no API key needed
 - **Pydantic** — structured output schemas
+- **MCP (`mcp[cli]`, FastMCP)** — exposes the pipeline as a callable tool for any MCP client
+- **Docker** — containerizes the MCP server for network-reachable, portable deployment
 
 ## Framework Comparison: LangGraph vs CrewAI
 

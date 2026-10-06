@@ -59,3 +59,39 @@ Neither framework is strictly "better" — they suit different situations:
 - **LangGraph** is the stronger choice when the workflow genuinely has cycles/branches that need reliable, code-enforced control flow — the graph model makes this explicit and guaranteed.
 - **CrewAI** has a lower-friction mental model for role-based delegation (agents with personas, tasks with clear ownership) when the workflow is closer to a linear pipeline, but replicating LangGraph-style loops requires either an unreliable hierarchical mode or a manual Python loop that reimplements what LangGraph gives natively.
 - Both frameworks, in this project, needed the same underlying lesson applied independently: **explicit, bounded instructions produce reliable agent behavior; vague ones don't** — regardless of which framework is doing the orchestration.
+
+## MCP Server and Docker: Extraction, Local Client, and Containerized Deployment
+
+The LangGraph version was further extended with an MCP server and a Docker build, as a hands-on exercise in the two layers that sit *around* an agent pipeline once it's built: how other tools call it (MCP), and where/how it actually runs (Docker).
+
+### Extracting the pipeline out of the notebook
+
+Both MCP and Docker need a plain, importable Python entrypoint — a notebook can't be imported by another program or run as a standalone process. `learning_path_core.py` holds the exact same code as the notebook (same lines, same order, extracted verbatim rather than rewritten, with inline comments flagging historical bug fixes without changing any code), confirmed to run correctly standalone before building anything on top of it.
+
+### MCP: exposing the pipeline as a callable tool
+
+`mcp_server.py` wraps the compiled graph in a single MCP tool, `generate_learning_path`, with `mode` exposed as a parameter so a caller can choose web search or document-grounded (RAG) generation. Connected to Claude Desktop using `stdio` transport (Claude Desktop launches the Python process locally and talks to it directly — no network, no hosting involved).
+
+**Two real bugs found while setting this up:**
+
+1. **A Windows-specific config location bug.** Claude Desktop was installed as an MSIX package, which redirects its actual config file to a sandboxed path (`AppData\Local\Packages\Claude_<id>\LocalCache\Roaming\Claude\claude_desktop_config.json`) rather than the conventional `%APPDATA%\Claude` location most documentation assumes. Editing the "expected" location silently had no effect — discovered by using the app's own "Edit config" button, which revealed the real path.
+
+2. **An intermittent startup timeout, caused by a hidden network dependency.** The local embeddings model (`HuggingFaceEmbeddings`) checked in with the HuggingFace Hub on every server startup — even though the model was already downloaded and cached — and that check occasionally hung long enough on a slow network connection to exceed Claude Desktop's internal connection timeout, causing the server to appear "broken" with no code-level error to point to. Fixed with `HF_HUB_OFFLINE=1`, forcing it to use only the local cache.
+
+### Docker: containerizing the same server for network deployment
+
+The same `mcp_server.py` supports a second transport mode, `streamable-http`, controlled by one environment variable (`MCP_TRANSPORT`) that Claude Desktop's config never sets — so the local stdio setup is entirely unaffected by the Docker addition. In `streamable-http` mode the server listens on a real network port instead of talking over stdio to a local parent process, which is what makes it containerizable and reachable from outside the host machine at all.
+
+**A real, iterative debugging sequence while getting the image to actually run (not just build):**
+
+1. **Unconstrained PyTorch pulled several gigabytes of unused NVIDIA/CUDA packages.** `sentence-transformers` depends on PyTorch, and pip defaulted to the full GPU-enabled build. Fixed by pinning the CPU-only build explicitly (`--extra-index-url https://download.pytorch.org/whl/cpu`) — this container has no GPU to use, so the CUDA packages were pure waste, both in build time and image size.
+2. **The `mcp` package resolved to a newer major version inside the container than the code was written against.** The local Anaconda environment had an older `mcp` 1.x installed from initial setup, which is why Claude Desktop worked fine locally — Docker, building fresh, pulled the newest available (`mcp` 2.x), which renamed `FastMCP` to `MCPServer` and broke the import. Fixed by pinning `mcp[cli]<2`. A clean illustration of why unpinned dependencies are risky: the bug wasn't introduced by Docker, it was *always* latent — Docker just doesn't share the same already-installed environment a local setup silently relies on.
+3. **A genuinely unused import, previously flagged but left in place, caused a missing-dependency failure.** `learning_path_core.py` had a leftover `from langchain_openai import ChatOpenAI` from early exploration that was never actually called — harmless locally (already installed as a transitive dependency), but a hard failure in the trimmed `requirements-mcp.txt`, which deliberately didn't include it since nothing appeared to use it.
+4. **A missing package for LangGraph's SQLite checkpointer.** `langgraph.checkpoint.sqlite` is published as a separate package, `langgraph-checkpoint-sqlite`, split out from the base `langgraph` package — not obvious from the import line alone.
+5. **An API placement mismatch for `host`/`port`.** The installed `mcp` SDK version expects `host` and `port` to be passed to the `FastMCP` constructor, not to `.run()` — a `TypeError` revealed this directly, trivial once surfaced.
+
+After these fixes, the container built and ran successfully (`Uvicorn running on http://0.0.0.0:8000`), and was confirmed reachable from outside the container with `curl http://localhost:8000/mcp`: a structured MCP protocol error response (rather than a connection failure) confirmed the server was correctly receiving and responding to requests over the network — `curl` isn't a full MCP client, so a protocol-level rejection is actually the expected, correct result for this kind of reachability check, not a failure.
+
+### Why this matters for the framework/deployment comparison
+
+This extension reinforced the same theme that ran through the LangGraph vs. CrewAI comparison: most of the real friction in building agentic systems isn't in the agent logic itself (both pipelines' core nodes worked essentially unchanged throughout) — it's in the surrounding infrastructure: environment assumptions that silently differ between "works on my machine" and a fresh environment, dependency version drift, and failure modes (a hanging network call, a sandboxed config path) that have nothing to do with LLMs or prompts at all. Docker didn't introduce these problems; it exposed ones that were already there, waiting in an unpinned requirements file and an environment nobody had explicitly specified.

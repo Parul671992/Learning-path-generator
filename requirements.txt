@@ -1,7 +1,9 @@
 langgraph
+langgraph-checkpoint-sqlite
 langchain-groq
 langchain-community
 langchain-core
+langchain-openai
 pydantic
 python-dotenv
 tavily-python
@@ -14,3 +16,4 @@ langchain-text-splitters
 chromadb
 sentence-transformers
 pypdf
+mcp[cli]<2

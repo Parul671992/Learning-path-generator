@@ -1,0 +1,19 @@
+# Secrets - never baked into the image, passed at `docker run` time instead
+.env
+
+# Notebooks and dev-only files - not needed inside the container
+*.ipynb
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+
+# Git
+.git/
+.gitignore
+
+# Docs - not needed to run the server
+README.md
+COMPARISON.md
+
+# The CrewAI notebook's own working files, if any
+learning_path_generator_crewai.ipynb

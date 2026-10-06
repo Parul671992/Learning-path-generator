@@ -1,0 +1,27 @@
+# CPU-only PyTorch (avoids multi-GB NVIDIA/CUDA downloads this container will never use)
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+
+# MCP server framework - pinned below 2.x to match FastMCP-based code
+mcp[cli]<2
+
+# LangGraph core + sqlite checkpointer (split into a separate package from core langgraph)
+langgraph
+langgraph-checkpoint-sqlite
+
+# LangChain ecosystem packages actually imported in learning_path_core.py
+langchain-core
+langchain-openai
+langchain-groq
+langchain-community
+langchain-huggingface
+langchain-chroma
+langchain-text-splitters
+
+# Supporting libraries
+pydantic
+python-dotenv
+chromadb
+sentence-transformers
+pypdf
+tavily-python
